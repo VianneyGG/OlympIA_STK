@@ -10,6 +10,8 @@ from tqdm import tqdm
 import random
 import heapq
 import math
+import csv
+import os
 
 # =============================================================================
 # RÉSEAU DE NEURONES DUELING DQN (Deep Q-Network)
@@ -380,6 +382,13 @@ class EnhancedLunarLanderDQN:
             num_episodes: Nombre d'épisodes d'entraînement
             render: Si True, affiche l'environnement visuellement (ralentit l'entraînement)
         """
+        # Préparer le fichier CSV pour la journalisation
+        csv_file = "training_log.csv"
+        write_header = not os.path.exists(csv_file) or os.stat(csv_file).st_size == 0
+        csv_f = open(csv_file, mode="a", newline="")
+        csv_writer = csv.writer(csv_f)
+        if write_header:
+            csv_writer.writerow(["episode", "step", "total_reward", "extrinsic_reward", "intrinsic_reward", "action"])
         # Reconfigurer l'environnement avec ou sans rendu
         if render and self.env.spec.kwargs.get('render_mode') != 'human':
             self.env.close()
@@ -434,10 +443,17 @@ class EnhancedLunarLanderDQN:
                 # Combinaison des récompenses extrinsèque et intrinsèque
                 total_step_reward = reward + self.intrinsic_reward_scale * intrinsic_reward
                 total_reward += total_step_reward
-                
                 # Stockage pour analyse
                 self.intrinsic_rewards.append(intrinsic_reward)
-                
+                # Journalisation CSV de l'étape
+                csv_writer.writerow([
+                    episode,
+                    step_count,
+                    total_reward,
+                    reward,
+                    intrinsic_reward,
+                    action
+                ])
                 self.steps_done += 1
                 step_count += 1
 
@@ -508,17 +524,17 @@ class EnhancedLunarLanderDQN:
             
             # Ne pas fermer l'environnement à chaque épisode pendant l'entraînement
 
-        # Sauvegarde du modèle entraîné
-        torch.save(self.policy_net.state_dict(), "enhanced_lunar_lander_dqn.pth")
-        print("\nModèle sauvegardé dans 'enhanced_lunar_lander_dqn.pth'")
-        
-        # Fermer l'environnement d'entraînement à la fin
-        self.env.close()
-
-        # =====================================================
-        # VISUALISATION DES RÉSULTATS D'ENTRAÎNEMENT
-        # =====================================================
-        self._plot_training_results()
+    # Sauvegarde du modèle entraîné
+    torch.save(self.policy_net.state_dict(), "enhanced_lunar_lander_dqn.pth")
+    print("\nModèle sauvegardé dans 'enhanced_lunar_lander_dqn.pth'")
+    # Fermer l'environnement d'entraînement à la fin
+    self.env.close()
+    # Fermer le fichier CSV
+    csv_f.close()
+    # =====================================================
+    # VISUALISATION DES RÉSULTATS D'ENTRAÎNEMENT
+    # =====================================================
+    self._plot_training_results()
 
     def _plot_training_results(self):
         """
@@ -839,7 +855,7 @@ if __name__ == '__main__':
     try:
         # Création et entraînement de l'agent amélioré
         lunar_lander = EnhancedLunarLanderDQN()
-        lunar_lander.train(num_episodes=2000)  # Plus d'épisodes pour le PER
+        lunar_lander.train(num_episodes=3000)  # Plus d'épisodes pour le PER
         
         print("\nEntraînement terminé! Démarrage des tests...")
         print("="*70)
