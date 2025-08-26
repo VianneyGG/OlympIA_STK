@@ -524,17 +524,17 @@ class EnhancedLunarLanderDQN:
             
             # Ne pas fermer l'environnement à chaque épisode pendant l'entraînement
 
-    # Sauvegarde du modèle entraîné
-    torch.save(self.policy_net.state_dict(), "enhanced_lunar_lander_dqn.pth")
-    print("\nModèle sauvegardé dans 'enhanced_lunar_lander_dqn.pth'")
-    # Fermer l'environnement d'entraînement à la fin
-    self.env.close()
-    # Fermer le fichier CSV
-    csv_f.close()
-    # =====================================================
-    # VISUALISATION DES RÉSULTATS D'ENTRAÎNEMENT
-    # =====================================================
-    self._plot_training_results()
+        # Sauvegarde du modèle entraîné
+        torch.save(self.policy_net.state_dict(), "enhanced_lunar_lander_dqn.pth")
+        print("\nModèle sauvegardé dans 'enhanced_lunar_lander_dqn.pth'")
+        # Fermer l'environnement d'entraînement à la fin
+        self.env.close()
+        # Fermer le fichier CSV
+        csv_f.close()
+        # =====================================================
+        # VISUALISATION DES RÉSULTATS D'ENTRAÎNEMENT
+        # =====================================================
+        self._plot_training_results()
 
     def _plot_training_results(self):
         """
