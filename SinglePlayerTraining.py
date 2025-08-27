@@ -298,12 +298,12 @@ class EnhancedLunarLanderDQN:
     learning_rate = 0.0005          # Taux d'apprentissage réduit pour plus de stabilité
     discount_factor = 0.99          # Facteur de remise gamma pour les récompenses futures
     batch_size = 128                # Taille du batch augmentée pour GPU
-    network_sync_frequency = 500    # Fréquence de mise à jour du réseau cible
-    replay_buffer_capacity = 100000 # Capacité du buffer de replay augmentée
+    network_sync_frequency = 200    # Fréquence de mise à jour du réseau cible (plus fréquent)
+    replay_buffer_capacity = 20000  # Capacité du buffer de replay réduite
     
     # Paramètres ICM (remplace epsilon-greedy)
     icm_learning_rate = 0.0005      # Taux d'apprentissage pour ICM
-    intrinsic_reward_scale = 0.01   # Échelle des récompenses intrinsèques
+    intrinsic_reward_scale = 0.05   # Échelle des récompenses intrinsèques (plus forte)
     forward_loss_weight = 0.2       # Poids du forward model dans ICM
     inverse_loss_weight = 0.8       # Poids de l'inverse model dans ICM
     
@@ -320,6 +320,15 @@ class EnhancedLunarLanderDQN:
     # =========================================================================
     # INITIALISATION DE L'AGENT
     # =========================================================================
+    # Préparer le fichier CSV de log par épisode
+    episode_log_file = "training_episode_log.csv"
+    write_header_ep = not os.path.exists(episode_log_file) or os.stat(episode_log_file).st_size == 0
+    episode_log_f = open(episode_log_file, mode="a", newline="")
+    episode_log_writer = csv.writer(episode_log_f)
+    if write_header_ep:
+        episode_log_writer.writerow([
+            "episode", "total_reward", "avg_reward_100", "avg_intrinsic_reward", "steps", "most_common_action"
+        ])
     def __init__(self):
         """
         Initialise l'agent DQN amélioré avec l'environnement et tous les composants nécessaires.
@@ -442,6 +451,8 @@ class EnhancedLunarLanderDQN:
                 
                 # Combinaison des récompenses extrinsèque et intrinsèque
                 total_step_reward = reward + self.intrinsic_reward_scale * intrinsic_reward
+                # Clipping de la récompense totale pour éviter les valeurs extrêmes
+                total_step_reward = np.clip(total_step_reward, -300, 300)
                 total_reward += total_step_reward
                 # Stockage pour analyse
                 self.intrinsic_rewards.append(intrinsic_reward)
@@ -463,10 +474,10 @@ class EnhancedLunarLanderDQN:
                 # Créer les tenseurs pour stockage (CPU pour le buffer)
                 state_tensor_cpu = torch.FloatTensor(observation).unsqueeze(0)
                 next_state_tensor_cpu = torch.FloatTensor(new_observation).unsqueeze(0)
-                
                 transition = Transition(state_tensor_cpu, action, total_step_reward, next_state_tensor_cpu, done)
                 # Stocker sans erreur TD pour l'instant (sera calculée lors de l'optimisation)
                 self.replay_buffer.push(transition)
+            # (Suppression de la fermeture du fichier CSV de log par épisode ici)
 
                 # =====================================================
                 # APPRENTISSAGE PAR BATCH (Experience Replay + ICM)
