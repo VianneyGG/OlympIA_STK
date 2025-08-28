@@ -456,15 +456,16 @@ class EnhancedLunarLanderDQN:
                 total_reward += total_step_reward
                 # Stockage pour analyse
                 self.intrinsic_rewards.append(intrinsic_reward)
-                # Journalisation CSV de l'étape
-                csv_writer.writerow([
-                    episode,
-                    step_count,
-                    total_reward,
-                    reward,
-                    intrinsic_reward,
-                    action
-                ])
+                # Journalisation CSV de l'étape (1 step sur 50 seulement)
+                if step_count % 50 == 0:
+                    csv_writer.writerow([
+                        episode,
+                        step_count,
+                        total_reward,
+                        reward,
+                        intrinsic_reward,
+                        action
+                    ])
                 self.steps_done += 1
                 step_count += 1
 
