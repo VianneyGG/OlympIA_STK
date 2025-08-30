@@ -20,6 +20,7 @@ Date: Août 2025
 # IMPORTATIONS
 # =============================================================================
 
+import re
 import gymnasium as gym
 import pystk2_gymnasium as pystk_gym
 import numpy as np
@@ -36,13 +37,10 @@ import os
 # Création d'un environnement vectorisé pour un entraînement parallèle
 # SuperTuxKart : Environnement de course avec voitures
 # n_envs=4 : Réduire le nombre d'environnements pour SuperTuxKart (plus lourd)
-training_env = make_vec_env(
+training_env = gym.make(
     "supertuxkart/flattened_discrete-v0", 
-    n_envs=8,  # Réduit pour éviter les problèmes de mémoire
-    env_kwargs={
-        "render_mode": None,  # Pas de rendu pendant l'entraînement
-        "track": "hacienda",  # Piste par défaut
-    }
+    render_mode=None,
+    track="hacienda"
 )
 
 # =============================================================================
@@ -86,10 +84,6 @@ else:
     print(f"Sauvegarde du modèle sous le nom : {model_name}")
     model.save(model_name)
     print("Entraînement terminé avec succès !")
-
-# =============================================================================
-# ÉVALUATION DU MODÈLE
-# =============================================================================
 
 # =============================================================================
 # ÉVALUATION DU MODÈLE
