@@ -65,24 +65,50 @@ from stable_baselines3 import PPO
 # Création d'un environnement vectorisé pour un entraînement parallèle
 # SuperTuxKart : Environnement de course avec voitures
 # n_envs=4 : Réduire le nombre d'environnements pour SuperTuxKart (plus lourd)
-training_env = DummyVecEnv([lambda: Monitor(
-    gym.make(
-        "supertuxkart/flattened_discrete-v0", 
-        render_mode=None,
-        track="hacienda"
-    ),
-    filename=None
-)])
+# Création d'un environnement vectorisé pour entraînement parallèle
+# Utilise `make_vec_env` pour créer plusieurs copies de l'environnement afin
+# d'améliorer l'efficacité de PPO. On garde le rendu désactivé pendant
+# l'entraînement (render_mode=None) et on force la piste par défaut.
+env_id = "supertuxkart/flattened_discrete-v0"
+def _make_monitored_env():
+    return Monitor(
+        gym.make(env_id, render_mode=None, track="hacienda"),
+        filename=None,
+    )
+
+# Nombre d'environnements parallèles (adaptez selon les ressources SSH)
+n_envs = 8
+training_env = make_vec_env(_make_monitored_env, n_envs=n_envs)
 
 # =============================================================================
 # CONFIGURATION DU MODÈLE PPO
 # =============================================================================
 
 # Initialisation du modèle PPO avec une politique MultiInput (pour espaces d'observation dict)
+# Policy network configuration for driving: separate heads for policy and value
+policy_kwargs = dict(
+    net_arch=[
+        dict(pi=[256, 256], vf=[256, 256])
+    ]
+)
+
 model = PPO(
-    policy="MultiInputPolicy",             # Type de politique : réseau de neurones pour espaces d'observation dict
-    env=training_env,                      # Environnement d'entraînement
-    verbose=1                              # Niveau de verbosité (1 = progression de l'entraînement)
+    policy="MultiInputPolicy",
+    env=training_env,
+    learning_rate=2.5e-4,
+    n_steps=2048,        # timesteps per rollout (larger for stable updates)
+    batch_size=64,
+    n_epochs=10,         # SGD epochs per update
+    gamma=0.99,
+    gae_lambda=0.95,
+    clip_range=0.2,
+    ent_coef=0.01,
+    vf_coef=0.5,
+    max_grad_norm=0.5,
+    policy_kwargs=policy_kwargs,
+    verbose=1,
+    tensorboard_log="./tensorboard/ppo_stk/",
+    device="auto",
 )
 
 # =============================================================================
