@@ -28,6 +28,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3 import PPO
+from utils.path_utils import path_to_str
 
 # =============================================================================
 # CONFIGURATION DE L'ENVIRONNEMENT
@@ -64,10 +65,10 @@ model = PPO(
 model_name = "ppo_stk"
 
 model.learn(total_timesteps=int(1e6))
-model.save(model_name)
+model.save(path_to_str(model_name))
 
 # =============================================================================
 # ÉVALUATION DU MODÈLE
 # =============================================================================
 
-model = PPO.load(model_name)
+model = PPO.load(path_to_str(model_name))
