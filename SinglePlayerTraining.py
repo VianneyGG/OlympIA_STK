@@ -20,6 +20,35 @@ Date: Août 2025
 # IMPORTATIONS
 # =============================================================================
 
+import tarfile
+from pathlib import Path
+import os
+
+# Compatibility patch: some environments (or third-party packages) may pass
+# pathlib.Path / PosixPath objects as tar member names to the stdlib
+# `tarfile` internals. In Python 3.9 the internal function
+# `_get_filtered_attrs` expects `member.name` to be a string and calls
+# `startswith` on it. When it receives a Path, it raises
+# AttributeError: 'PosixPath' object has no attribute 'startswith'.
+#
+# We monkeypatch `tarfile._get_filtered_attrs` to coerce `member.name` to
+# `str` when necessary. This is a minimal, local change that avoids
+# editing installed packages and fixes the crash seen over SSH when
+# `pystk2_gymnasium` extracts tracks or archives.
+_orig_get_filtered_attrs = getattr(tarfile, "_get_filtered_attrs", None)
+if _orig_get_filtered_attrs is not None:
+    def _patched_get_filtered_attrs(member, targetpath, tarinfo_isdir=False):
+        try:
+            name = getattr(member, "name", None)
+            if isinstance(name, Path):
+                member.name = str(name)
+        except Exception:
+            # Be defensive: if anything goes wrong, fall back to original
+            pass
+        return _orig_get_filtered_attrs(member, targetpath, tarinfo_isdir)
+
+    tarfile._get_filtered_attrs = _patched_get_filtered_attrs
+
 import gymnasium as gym
 import pystk2_gymnasium as pystk_gym
 import numpy as np
@@ -28,7 +57,6 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3 import PPO
-from utils.path_utils import path_to_str
 
 # =============================================================================
 # CONFIGURATION DE L'ENVIRONNEMENT
@@ -65,10 +93,10 @@ model = PPO(
 model_name = "ppo_stk"
 
 model.learn(total_timesteps=int(1e6))
-model.save(path_to_str(model_name))
+model.save(model_name)
 
 # =============================================================================
 # ÉVALUATION DU MODÈLE
 # =============================================================================
 
-model = PPO.load(path_to_str(model_name))
+model = PPO.load(model_name)
