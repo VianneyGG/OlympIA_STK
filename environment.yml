@@ -1,0 +1,18 @@
+name: OlympIA_STK_py311
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  # Prebuilt binaries to avoid building Box2D from source on Windows
+  - box2d-py
+  - swig
+  # You can also bring gymnasium from conda-forge if preferred
+  - gymnasium
+  - pip:
+      - numpy>=1.21.0
+      - pystk2_gymnasium>=0.7.2
+      - torch>=2.0
+      - matplotlib>=3.5.1
+      - tqdm>=4.64.1
+      - tensorboard>=2.9.1
