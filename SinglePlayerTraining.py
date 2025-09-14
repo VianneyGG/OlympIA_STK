@@ -90,9 +90,8 @@ training_env = make_vec_env(_make_monitored_env, n_envs=n_envs)
 # Initialisation du modèle PPO avec une politique MultiInput (pour espaces d'observation dict)
 # Policy network configuration for driving: separate heads for policy and value
 policy_kwargs = dict(
-    net_arch=[
-        dict(pi=[256, 256], vf=[256, 256])
-    ]
+    # SB3 >= 1.8: passer un dict directement (et non une liste contenant un dict)
+    net_arch=dict(pi=[256, 256], vf=[256, 256])
 )
 
 # =============================================================================
@@ -170,6 +169,10 @@ class LossPlotCallback(BaseCallback):
             plt.close(fig)
         except Exception:
             pass
+
+    def _on_step(self) -> bool:
+        # Requis par BaseCallback; ici, rien à faire à chaque step.
+        return True
 
 
 def loss_callback() -> LossPlotCallback:
