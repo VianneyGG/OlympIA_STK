@@ -1,1 +1,137 @@
+############################
+# Environment and secrets
+############################
 .env
+.env.*
+*.env
+
+############################
+# Python
+############################
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Pydantic/poetry/pdm caches
+.pdm.toml
+.pdm-python
+.mypy_cache/
+.pytype/
+dmypy.json
+cython_debug/
+
+############################
+# Virtual environments
+############################
+.venv/
+venv/
+ENV/
+env/
+.conda/
+conda-meta/
+.python-version
+
+############################
+# Jupyter & data exploration
+############################
+.ipynb_checkpoints/
+
+############################
+# IDE / Editor
+############################
+.vscode/
+.idea/
+*.code-workspace
+
+############################
+# OS files
+############################
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+############################
+# Logs & runtime
+############################
+logs/
+*.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+############################
+# Project specific: ML artifacts
+############################
+# TensorBoard runs
+tensorboard/
+**/events.out.tfevents.*
+
+# Trained model weights & checkpoints
+*.pth
+*.pt
+*.ckpt
+checkpoints/
+
+# Stable-Baselines / RL
+ppo_*.zip
+**/monitor.csv
+
+# Temporary data
+tmp/
+temp/
+*.tmp
+
+# Datasets (if any)
+data/
+datasets/
+
+# Diagnostics
+dll_diag*.txt
+
