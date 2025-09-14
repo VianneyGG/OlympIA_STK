@@ -23,6 +23,7 @@ Date: Août 2025
 import tarfile
 from pathlib import Path
 import os
+from typing import Optional, List, Dict, Any
 
 # Compatibility patch: some environments (or third-party packages) may pass
 # pathlib.Path / PosixPath objects as tar member names to the stdlib
@@ -57,6 +58,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3 import PPO
+import matplotlib.pyplot as plt
+from stable_baselines3.common.callbacks import BaseCallback
 
 # =============================================================================
 # CONFIGURATION DE L'ENVIRONNEMENT
@@ -92,10 +95,96 @@ policy_kwargs = dict(
     ]
 )
 
+# =============================================================================
+# CALLBACK POUR LE TRACE DE LA LOSS
+# =============================================================================
+
+class LossPlotCallback(BaseCallback):
+    """
+    Callback SB3 minimaliste pour enregistrer et tracer `train/loss` pendant l'entraînement
+    (cf. docs SB3: train/loss est loggé pour PPO). Sauvegarde un PNG en fin d'entraînement.
+    """
+
+    def __init__(
+        self,
+        save_path: Optional[str] = os.path.join("tensorboard", "ppo_stk", "loss_plot.png"),
+    ) -> None:
+        super().__init__()
+        self.save_path = save_path
+        self.timesteps: List[int] = []
+        self.loss_values: List[float] = []
+
+    def _get_logger_values(self) -> Dict[str, float]:
+        """Récupère les dernières valeurs du logger SB3 (impl-dépendant)."""
+        logger = getattr(self.model, "logger", None)
+        if logger is None:
+            return {}
+        for attr in ("name_to_value", "_name_to_value"):
+            values = getattr(logger, attr, None)
+            if isinstance(values, dict) and values:
+                return {str(k): v for k, v in values.items() if isinstance(k, str)}
+        get_log_dict = getattr(logger, "get_log_dict", None)
+        if callable(get_log_dict):
+            try:
+                values = get_log_dict()
+                if isinstance(values, dict):
+                    return values
+            except Exception:
+                pass
+        return {}
+
+    def _on_training_start(self) -> None:
+        self.timesteps.clear()
+        self.loss_values.clear()
+
+    def _on_rollout_start(self) -> None:
+        # Les valeurs `train/...` du logger correspondent à l'update précédent.
+        values = self._get_logger_values()
+        if not values:
+            return
+        # Priorité aux clés documentées: `train/loss`, fallback `train/value_loss`.
+        val = values.get("train/loss")
+        if val is None:
+            val = values.get("train/value_loss")
+        if val is None:
+            return
+        try:
+            self.timesteps.append(int(self.model.num_timesteps))
+            self.loss_values.append(float(val))
+        except Exception:
+            pass
+
+    def _on_training_end(self) -> None:
+        if not self.timesteps or not self.loss_values:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.plot(self.timesteps, self.loss_values, label="train/loss")
+            ax.set_title("Training Loss")
+            ax.set_xlabel("Timesteps")
+            ax.set_ylabel("Loss")
+            ax.legend(loc="best")
+            fig.tight_layout()
+            fig.savefig(self.save_path)
+            plt.close(fig)
+        except Exception:
+            pass
+
+
+def loss_callback() -> LossPlotCallback:
+    """Fonction utilitaire pour créer une instance de callback de loss.
+
+    Retourne:
+        LossPlotCallback: callback compatible avec `learn(callback=...)`.
+    """
+    return LossPlotCallback()
+
+# Initialisation du modèle PPO avec une politique MultiInput (pour espaces d'observation dict)
 model = PPO(
     policy="MultiInputPolicy",
     env=training_env,
-    learning_rate=2.5e-4,
+    learning_rate=3e-4,
     n_steps=2048,        # timesteps per rollout (larger for stable updates)
     batch_size=64,
     n_epochs=10,         # SGD epochs per update
@@ -106,6 +195,7 @@ model = PPO(
     vf_coef=0.5,
     max_grad_norm=0.5,
     policy_kwargs=policy_kwargs,
+    normalize_advantage=True,
     verbose=1,
     tensorboard_log="./tensorboard/ppo_stk/",
     device="auto",
@@ -116,9 +206,9 @@ model = PPO(
 # =============================================================================
 
 # Définition du nom du modèle sauvegardé
-model_name = "ppo_stk"
+model_name = "q-supertuxkart/flattened_discrete-v0-single_track_hacienda-ppos"
 
-model.learn(total_timesteps=int(1e6))
+model.learn(total_timesteps=int(1e6), progress_bar=True, callback=loss_callback())
 model.save(model_name)
 
 # =============================================================================
