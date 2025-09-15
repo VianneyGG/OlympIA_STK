@@ -56,7 +56,7 @@ import gymnasium as gym
 import pystk2_gymnasium as pystk_gym
 import numpy as np
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3 import PPO
@@ -83,7 +83,13 @@ def _make_monitored_env():
 
 # Nombre d'environnements parallèles (adaptez selon les ressources SSH)
 n_envs = 8
-training_env = make_vec_env(_make_monitored_env, n_envs=n_envs, norm_obs=True, norm_reward=True)
+# Crée le vec env, puis applique VecNormalize pour normaliser obs et récompenses
+training_env = make_vec_env(_make_monitored_env, n_envs=n_envs)
+training_env = VecNormalize(
+    training_env,
+    norm_obs=True,
+    norm_reward=True
+)
 
 # =============================================================================
 # CONFIGURATION DU MODÈLE PPO
@@ -469,12 +475,34 @@ model = PPO(
 model_name = "q-supertuxkart/flattened_discrete-v0-single_track_hacienda-ppos"
 
 model.learn(total_timesteps=int(2 * 1e6), progress_bar=True, callback=loss_callback())
+
+# Sauvegarde du modèle et des statistiques de normalisation (VecNormalize)
 model.save(model_name)
+vn_stats_path = os.path.join("tensorboard", "ppo_stk", "vecnormalize.pkl")
+try:
+    os.makedirs(os.path.dirname(vn_stats_path), exist_ok=True)
+    training_env.save(vn_stats_path)
+except Exception:
+    pass
 
 # =============================================================================
 # ÉVALUATION DU MODÈLE
 # =============================================================================
-en.reset()
+# Recharge le modèle et réapplique les stats de normalisation pour évaluer en reward "réel"
 model = PPO.load(model_name)
-mean_reward, std_reward = evaluate_policy(model, model.get_env(), n_eval_episodes=10)
+
+# Crée un env d'évaluation (1 env) et charge les stats de VecNormalize
+eval_env = make_vec_env(_make_monitored_env, n_envs=1)
+try:
+    eval_env = VecNormalize.load(vn_stats_path, eval_env)
+except Exception:
+    # Si pas de fichier de stats (premier run), on garde l'env brut
+    pass
+
+# Désactive l'update des stats et n'applique pas la normalisation sur les rewards pour obtenir le score env réel
+if isinstance(eval_env, VecNormalize):
+    eval_env.training = False
+    eval_env.norm_reward = False
+
+mean_reward, std_reward = evaluate_policy(model, eval_env, n_eval_episodes=10)
 print(f"Mean reward over 10 evaluation episodes: {mean_reward:.2f} +/- {std_reward:.2f}")
