@@ -34,7 +34,7 @@ if __name__ == '__main__':
     # - `discrete` is a vector (of integers) corresponding to discrete observations
     env = gym.make("supertuxkart/flattened_discrete-v0", render_mode="human", agent=AgentSpec(use_ai=False), track="hacienda")
 
-    model = PPO.load("ppo_stk.zip", env=env)
+    model = PPO.load("q-supertuxkart/flattened_discrete-v0-single_track_hacienda-ppos", env=env)
     ix = 0
     done = False
     state, *_ = env.reset()
