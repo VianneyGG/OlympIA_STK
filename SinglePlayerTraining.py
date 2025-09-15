@@ -82,8 +82,8 @@ def _make_monitored_env():
     )
 
 # Nombre d'environnements parallèles (adaptez selon les ressources SSH)
-n_envs = 4
-training_env = make_vec_env(_make_monitored_env, n_envs=n_envs)
+n_envs = 8
+training_env = make_vec_env(_make_monitored_env, n_envs=n_envs, norm_obs=True, norm_reward=True)
 
 # =============================================================================
 # CONFIGURATION DU MODÈLE PPO
@@ -451,7 +451,7 @@ model = PPO(
     gamma=0.99,
     gae_lambda=0.95,
     clip_range=0.2,
-    ent_coef=0.00   1,
+    ent_coef=0.001,
     vf_coef=0.5,
     max_grad_norm=0.5,
     policy_kwargs=policy_kwargs,
@@ -468,7 +468,7 @@ model = PPO(
 # Définition du nom du modèle sauvegardé
 model_name = "q-supertuxkart/flattened_discrete-v0-single_track_hacienda-ppos"
 
-model.learn(total_timesteps=int(1e6), progress_bar=True, callback=loss_callback())
+model.learn(total_timesteps=int(2 * 1e6), progress_bar=True, callback=loss_callback())
 model.save(model_name)
 
 # =============================================================================
@@ -477,4 +477,4 @@ model.save(model_name)
 en.reset()
 model = PPO.load(model_name)
 mean_reward, std_reward = evaluate_policy(model, model.get_env(), n_eval_episodes=10)
-print(f"Mean reward over 10 evaluation episodes: {mean_reward:.2f} +/- {std_reward:.2f}") {std_reward:.2f}")
+print(f"Mean reward over 10 evaluation episodes: {mean_reward:.2f} +/- {std_reward:.2f}")
