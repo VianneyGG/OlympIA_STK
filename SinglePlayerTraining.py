@@ -85,11 +85,7 @@ def _make_monitored_env():
 n_envs = 8
 # Crée le vec env, puis applique VecNormalize pour normaliser obs et récompenses
 training_env = make_vec_env(_make_monitored_env, n_envs=n_envs)
-training_env = VecNormalize(
-    training_env,
-    norm_obs=True,
-    norm_reward=True
-)
+
 
 # =============================================================================
 # CONFIGURATION DU MODÈLE PPO
