@@ -83,6 +83,9 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3 import PPO
 import matplotlib.pyplot as plt
 from stable_baselines3.common.callbacks import EvalCallback, CallbackList
+from utils.reward_wrappers import STKRewardShaping
+from stable_baselines3.common.callbacks import BaseCallback
+from torch.utils.tensorboard import SummaryWriter
 
 # =============================================================================
 
@@ -94,10 +97,25 @@ if __name__ == "__main__":
     # CONFIGURATION DE L'ENVIRONNEMENT
     env_id = "supertuxkart/flattened_continuous_actions-v0"
     def _make_monitored_env():
-        return Monitor(
-            gym.make(env_id, render_mode=None, track="hacienda", num_kart=2),
-            filename=None,
+        base_env = gym.make(env_id, render_mode=None, track="hacienda", num_kart=2)
+        # Wrap with reward shaping for richer signal
+        shaped_env = STKRewardShaping(
+            base_env,
+            scale_progress=1.0,
+            w_forward_speed=0.02,
+            w_lateral=0.05,
+            p_offtrack=0.2,
+            p_reverse=0.5,
+            p_steer_jerk=0.01,
+            bonus_checkpoint=1.0,
+            bonus_finish=50.0,
+            use_position_bonus=False,
+            max_progress_step=0.1,
+            stuck_window=20,
+            stuck_threshold=0.005,
+            stuck_penalty=0.5,
         )
+        return Monitor(shaped_env, filename=None)
 
     n_envs = 8
     training_env = make_vec_env(_make_monitored_env, n_envs=n_envs)
@@ -110,6 +128,39 @@ if __name__ == "__main__":
         gamma=0.99,
         norm_obs_keys=["continuous"],
     )
+
+    class RewardComponentsLogger(BaseCallback):
+        """Log average reward components from info['rew_components'] to TensorBoard."""
+        def __init__(self, verbose: int = 0):
+            super().__init__(verbose)
+
+        def _on_step(self) -> bool:
+            # self.locals contains data from rollout collection
+            infos = self.locals.get("infos", [])
+            if not isinstance(infos, (list, tuple)):
+                return True
+            # Aggregate per key
+            sums = {}
+            counts = {}
+            for info in infos:
+                if not isinstance(info, dict):
+                    continue
+                comps = info.get("rew_components")
+                if not isinstance(comps, dict):
+                    continue
+                for k, v in comps.items():
+                    try:
+                        fv = float(v)
+                    except Exception:
+                        continue
+                    sums[k] = sums.get(k, 0.0) + fv
+                    counts[k] = counts.get(k, 0) + 1
+            if counts:
+                for k, s in sums.items():
+                    c = max(1, counts.get(k, 1))
+                    mean_v = s / c
+                    self.logger.record(f"rewards/{k}", mean_v)
+            return True
 
     policy_kwargs = dict(
         net_arch=dict(pi=[256, 256], vf=[256, 256])
@@ -152,16 +203,18 @@ if __name__ == "__main__":
         eval_env=eval_env_cb,
         best_model_save_path=best_model_dir,
         log_path=eval_log_dir,
-        eval_freq=50_000,
+        eval_freq=5_000,
         n_eval_episodes=5,
         deterministic=True,
         render=False,
     )
 
+    callback_list = CallbackList([eval_callback, RewardComponentsLogger()])
+
     model.learn(
-        total_timesteps=int(2 * 1e6),
+        total_timesteps=int(4 * 1e6),
         progress_bar=True,
-        callback=eval_callback,
+        callback=callback_list,
         tb_log_name="ppo_stk_continuous",
     )
 
