@@ -3,9 +3,15 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+# Ensure repo root is importable so `utils/...` can be found when running this file directly
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import numpy as np
 import torch
@@ -210,12 +216,35 @@ def main(args: Optional[list[str]] = None) -> None:
         tb_log_name=str(tb_dir.name),
     )
 
-    # Save model and VecNormalize stats
-    best_model_path = out_dir / "best_model.zip"
-    latest_model_path = out_dir / "latest_model.zip"
+    # Determine TensorBoard run number (directory suffix like '<run_name>_3')
+    def _tb_run_number() -> str:
+        base = tb_dir.parent
+        name = tb_dir.name
+        try:
+            candidates = [d for d in base.iterdir() if d.is_dir() and d.name.startswith(name)]
+            if not candidates:
+                return ""
+            # pick most recently modified
+            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            chosen = candidates[0].name
+            if chosen == name:
+                return ""
+            if chosen.startswith(name + "_"):
+                return chosen[len(name) + 1 :]
+            return ""
+        except Exception:
+            return ""
+
+    run_no = _tb_run_number()
+    step_no = int(getattr(model, "num_timesteps", 0))
+
+    # Save model and VecNormalize stats with TB run number and step
+    suffix = (f"_{run_no}" if run_no else "")
+    best_model_path = out_dir / f"best_model{suffix}.zip"
+    latest_model_path = out_dir / f"latest_model{suffix}_{step_no}.zip"
     model.save(str(latest_model_path))
 
-    vec_stats_path = out_dir / "vecnormalize.pkl"
+    vec_stats_path = out_dir / f"vecnormalize{suffix}_{step_no}.pkl"
     try:
         vec.save(str(vec_stats_path))
     except Exception:
