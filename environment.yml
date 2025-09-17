@@ -10,6 +10,7 @@ dependencies:
   # You can also bring gymnasium from conda-forge if preferred
   - gymnasium
   - pip:
+      - stable-baselines3>=2.3.0
       - numpy>=1.21.0
       - pystk2_gymnasium>=0.7.2
       - torch>=2.0

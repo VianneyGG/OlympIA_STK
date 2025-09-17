@@ -28,12 +28,12 @@ class STKRewardShaping(gym.Wrapper):
 	def __init__(self, env: gym.Env,
 				 scale_progress: float = 1.0,
 				 w_forward_speed: float = 0.02,
-				 w_lateral: float = 0.05,
-				 p_offtrack: float = 0.2,
+				 w_lateral: float = 0.2,
+				 p_offtrack: float = 1.5,
 				 p_reverse: float = 0.5,
 				 p_steer_jerk: float = 0.01,
 				 w_throttle_align: float = 0.1,
-				 w_steer_mag: float = 0.01,
+				 w_steer_mag: float = 0.02,
 				 bonus_checkpoint: float = 1.0,
 				 bonus_finish: float = 50.0,
 				 use_position_bonus: bool = False,
@@ -326,9 +326,9 @@ class STKRewardShaping(gym.Wrapper):
 		# Speed alignment (only forward component rewarded)
 		r_forward = self.w_forward_speed * max(0.0, forward_speed)
 
-		# Penalties
+		# Penalties (stronger off-track, heavier lateral; steer penalty will be squared below)
 		r_off = -self.p_offtrack * (1.0 if off_track else 0.0)
-		r_lat = -self.w_lateral * float(lateral_speed)
+		r_lat = -self.w_lateral * float(lateral_speed) ** 2
 		r_rev = -self.p_reverse * (1.0 if reverse else 0.0)
 		r_jerk = -self.p_steer_jerk * float(steer_jerk)
 
@@ -357,7 +357,8 @@ class STKRewardShaping(gym.Wrapper):
 		# Penalize strong steering when not progressing (discourage spinning)
 		r_steer_mag = 0.0
 		if steer_val is not None:
-			r_steer_mag = -self.w_steer_mag * abs(steer_val) * (1.0 - max(0.0, dnorm))
+			# squared steering penalty, scaled by lack of progress
+			r_steer_mag = -self.w_steer_mag * (abs(steer_val) ** 2) * (1.0 - max(0.0, dnorm))
 
 		# Stuck penalty over a small window of steps
 		stuck = (len(self.progress_hist) == self.progress_hist.maxlen and sum(self.progress_hist) < self.stuck_threshold)
@@ -375,6 +376,15 @@ class STKRewardShaping(gym.Wrapper):
 		r_finish = self.bonus_finish if finished else 0.0
 		# Checkpoint detection (coarse): large progress jump
 		r_checkpoint = self.bonus_checkpoint if d_prog > 0.02 else 0.0
+
+		# Gate positive rewards when off-track: do not encourage speed/progress while outside track
+		if off_track:
+			pos_block = 0.0
+			r_progress = min(0.0, r_progress)
+			r_forward = 0.0
+			r_throttle_align = 0.0
+		else:
+			pos_block = 1.0
 
 		shaped = (
 			r_progress + r_forward + r_off + r_lat + r_rev + r_jerk + r_stuck + r_pos + r_checkpoint + r_finish
@@ -396,12 +406,14 @@ class STKRewardShaping(gym.Wrapper):
 			"checkpoint": r_checkpoint,
 			"finish": r_finish,
 			"env_reward": float(env_reward),
+			"orig_reward": float(env_reward),
 			"d_progress": float(d_prog),
 			"forward_speed": float(forward_speed),
 			"lateral_speed": float(lateral_speed),
 			"off_track": bool(off_track),
 			"throttle_align": float(r_throttle_align),
 			"steer_mag": float(r_steer_mag),
+			"pos_block": float(pos_block),
 		})
 		# Expose calibration diagnostics periodically
 		if self.auto_calibrate:

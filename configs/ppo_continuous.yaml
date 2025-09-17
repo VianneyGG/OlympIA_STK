@@ -1,0 +1,49 @@
+# Training configuration for STK continuous actions with SB3 PPO
+
+# Env
+env_id: "supertuxkart/flattened_continuous_actions-v0"
+track: "hacienda"
+n_envs: 4
+seed: 123
+
+# Paths
+tb_log_dir: "tensorboard/ppo_stk_continuous"
+run_name: "ppo_stk_continuous_1"
+out_dir: "q-supertuxkart/continuous"
+checkpoints_dir: "q-supertuxkart/continuous/checkpoints"
+
+# VecNormalize
+norm_obs_keys: ["continuous"]
+clip_obs: 10.0
+clip_reward: 10.0
+gamma: 0.99
+
+# PPO hyperparams
+learning_rate: 1.0e-4
+n_steps: 2048
+batch_size: 64
+n_epochs: 10
+gae_lambda: 0.95
+clip_range: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+max_grad_norm: 0.5
+clip_range_vf: 1.0
+target_kl: 0.02
+use_sde: true
+sde_sample_freq: 64
+total_timesteps: 2000000
+
+# Callbacks
+eval_freq: 10000
+n_eval_episodes: 5
+checkpoint_freq: 0
+
+# Reward shaping
+enable_reward_shaping: true
+
+# Optional: map indices in obs["continuous"] to semantic signals for shaping (adjust if known)
+# obs_index_map:
+#   forward_speed: 20
+#   lateral_speed: 23
+#   off_track: 91
