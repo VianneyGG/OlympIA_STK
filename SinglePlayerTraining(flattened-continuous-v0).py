@@ -99,6 +99,18 @@ if __name__ == "__main__":
     def _make_monitored_env():
         base_env = gym.make(env_id, render_mode=None, track="hacienda", num_kart=2)
         # Wrap with reward shaping for richer signal
+        # Mapping from flattened continuous observation indices to semantics
+        # Derived via analyze_obs_continuous.py heuristic probe.
+        obs_index_map = {
+            # Forward speed correlated positively with distance delta
+            "forward_speed": 20,
+            # Guesses (may need refinement): lateral components often pair with forward
+            # We'll start with a low-impact usage; update once confirmed
+            "lateral_speed": 23,
+            # Off-track flag often appears near the end as a {0,1}-like scalar
+            "off_track": 91,
+        }
+
         shaped_env = STKRewardShaping(
             base_env,
             scale_progress=1.0,
@@ -114,6 +126,7 @@ if __name__ == "__main__":
             stuck_window=20,
             stuck_threshold=0.005,
             stuck_penalty=0.5,
+            obs_index_map=obs_index_map,
         )
         return Monitor(shaped_env, filename=None)
 

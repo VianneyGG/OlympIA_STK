@@ -40,7 +40,10 @@ class STKRewardShaping(gym.Wrapper):
 				 max_progress_step: float = 0.1,
 				 stuck_window: int = 20,
 				 stuck_threshold: float = 0.005,
-				 stuck_penalty: float = 0.5):
+				  stuck_penalty: float = 0.5,
+				  obs_index_map: Optional[Dict[str, int]] = None,
+				  auto_calibrate: bool = True,
+				  calib_steps: int = 256):
 		super().__init__(env)
 		self.prev_progress: Optional[float] = None
 		self.prev_distance: Optional[float] = None
@@ -62,6 +65,16 @@ class STKRewardShaping(gym.Wrapper):
 		self.max_progress_step = max_progress_step
 		self.stuck_threshold = stuck_threshold
 		self.stuck_penalty = stuck_penalty
+		# Optional mapping for extracting signals directly from observations
+		# Keys supported: 'forward_speed', 'lateral_speed', 'off_track', 'yaw_sin', 'yaw_cos'
+		self.obs_index_map: Optional[Dict[str, int]] = dict(obs_index_map) if obs_index_map else None
+		# Auto-calibration of observation indices
+		self.auto_calibrate: bool = bool(auto_calibrate)
+		self.calib_steps: int = int(max(32, calib_steps))
+		self._calib_done: bool = False
+		self._calib_X: Optional[list] = None
+		self._calib_dprog: Optional[list] = None
+		self._calib_off_info: Optional[list] = None
 
 	# -------- helpers
 	@staticmethod
@@ -139,9 +152,98 @@ class STKRewardShaping(gym.Wrapper):
 		self.prev_distance = None
 		self.prev_action = None
 		self.progress_hist.clear()
+		# Reset calibration buffers
+		self._calib_done = (self.obs_index_map is not None) and not self.auto_calibrate
+		self._calib_X = [] if self.auto_calibrate else None
+		self._calib_dprog = [] if self.auto_calibrate else None
+		self._calib_off_info = [] if self.auto_calibrate else None
 		# Prime progress trackers with first info
 		self._progress_delta(info)
 		return obs, info
+
+	def _finalize_calibration(self):
+		"""
+		Infers indices for forward_speed, lateral_speed (best-effort) and off_track
+		from the collected continuous observations and d_progress signal.
+		"""
+		if self._calib_done or not self.auto_calibrate:
+			return
+		X = np.asarray(self._calib_X, dtype=float) if self._calib_X else None
+		dp = np.asarray(self._calib_dprog, dtype=float) if self._calib_dprog else None
+		if X is None or X.ndim != 2 or X.shape[0] < 10 or dp is None or dp.shape[0] != X.shape[0]:
+			self._calib_done = True
+			return
+
+		# Forward speed index: highest positive correlation with d_progress
+		corrs = []
+		for i in range(X.shape[1]):
+			xi = X[:, i]
+			std = float(np.std(xi))
+			if std < 1e-8:
+				c = 0.0
+			else:
+				try:
+					c = float(np.corrcoef(xi, dp)[0, 1])
+				except Exception:
+					c = 0.0
+			corrs.append((i, c, std))
+		corrs.sort(key=lambda t: abs(t[1]), reverse=True)
+		fwd_idx = next((i for i, c, s in corrs if c > 0.2 and s > 1e-6), None)
+
+		# Off-track index: near-binary and (if info provided) correlates with off_track
+		off_idx = None
+		if self._calib_off_info and len(self._calib_off_info) == X.shape[0] and any(self._calib_off_info):
+			off = np.asarray(self._calib_off_info, dtype=float)
+			best = (-1e9, None)
+			for i in range(X.shape[1]):
+				xi = X[:, i]
+				# Normalize to [0,1] and measure binariness
+				xn = (xi - np.min(xi)) / (max(1e-9, np.max(xi) - np.min(xi)))
+				bin_score = float(np.mean((xn < 0.1) | (xn > 0.9)))
+				try:
+					c = float(np.corrcoef((xn > 0.5).astype(float), off)[0, 1])
+				except Exception:
+					c = 0.0
+				score = bin_score + abs(c)
+				if score > best[0]:
+					best = (score, i)
+			off_idx = best[1]
+		else:
+			# fallback: pick index with most near-binary behaviour and negative corr with d_progress
+			best = (-1e9, None)
+			for i in range(X.shape[1]):
+				xi = X[:, i]
+				xn = (xi - np.min(xi)) / (max(1e-9, np.max(xi) - np.min(xi)))
+				bin_score = float(np.mean((xn < 0.1) | (xn > 0.9)))
+				try:
+					c = float(np.corrcoef((xn > 0.5).astype(float), (dp > 1e-4).astype(float))[0, 1])
+				except Exception:
+					c = 0.0
+				score = bin_score + (0.2 if c < 0 else 0.0)
+				if score > best[0]:
+					best = (score, i)
+			off_idx = best[1]
+
+		# Lateral speed: heuristic — choose index with high variance, low |corr| with d_progress
+		lat_idx = None
+		for i, c, s in corrs:
+			if abs(c) < 0.15 and s > 1e-3:
+				lat_idx = i
+				break
+
+		new_map = {}
+		if fwd_idx is not None:
+			new_map["forward_speed"] = int(fwd_idx)
+		if lat_idx is not None:
+			new_map["lateral_speed"] = int(lat_idx)
+		if off_idx is not None:
+			new_map["off_track"] = int(off_idx)
+
+		# Merge with any provided mapping but let auto-calibration override if different
+		base = dict(self.obs_index_map) if isinstance(self.obs_index_map, dict) else {}
+		base.update(new_map)
+		self.obs_index_map = base if base else None
+		self._calib_done = True
 
 	def step(self, action):
 		obs, env_reward, terminated, truncated, info = self.env.step(action)
@@ -150,10 +252,55 @@ class STKRewardShaping(gym.Wrapper):
 		d_prog = self._progress_delta(info)
 		self.progress_hist.append(max(0.0, d_prog))
 
+		# Accumulate calibration data from raw observations
+		if self.auto_calibrate and not self._calib_done and isinstance(obs, dict) and "continuous" in obs:
+			try:
+				vec = np.asarray(obs["continuous"], dtype=float).reshape(-1)
+				self._calib_X.append(vec)
+				self._calib_dprog.append(float(d_prog))
+				self._calib_off_info.append(1.0 if self._get_bool(info, "off_track", "is_off_track") else 0.0)
+				if len(self._calib_X) >= self.calib_steps:
+					self._finalize_calibration()
+			except Exception:
+				pass
+
 		forward_speed = self._get_float(info, 0.0, "forward_speed", "speed")
 		lateral_speed = abs(self._get_float(info, 0.0, "lateral_speed"))
 		off_track = self._get_bool(info, "off_track", "is_off_track")
+		# More robust finished detection
 		finished = self._get_bool(info, "finished", "is_finished")
+		if not finished:
+			p, _ = self._extract_progress(info)
+			if p is not None and p >= 0.999:
+				finished = True
+
+		# If mapping provided and observation is available, override missing values
+		try:
+			if self.obs_index_map and isinstance(obs, dict) and "continuous" in obs:
+				vec = np.asarray(obs["continuous"], dtype=float)
+				# forward_speed from obs
+				ix = self.obs_index_map.get("forward_speed") if isinstance(self.obs_index_map, dict) else None
+				if ix is not None and 0 <= ix < vec.shape[0]:
+					fv = float(vec[ix])
+					# Only override if info didn't provide anything useful
+					if abs(forward_speed) < 1e-6:
+						forward_speed = fv
+				# lateral_speed from obs
+				ix = self.obs_index_map.get("lateral_speed") if isinstance(self.obs_index_map, dict) else None
+				if ix is not None and 0 <= ix < vec.shape[0]:
+					lv = abs(float(vec[ix]))
+					if abs(lateral_speed) < 1e-6:
+						lateral_speed = lv
+				# off_track from obs (treat >0.5 as True for boolean flags)
+				ix = self.obs_index_map.get("off_track") if isinstance(self.obs_index_map, dict) else None
+				if ix is not None and 0 <= ix < vec.shape[0]:
+					ot = bool(float(vec[ix]) > 0.5)
+					# If info lacks off_track, use obs flag
+					if not off_track:
+						off_track = ot
+		except Exception:
+			# be defensive, never break env stepping due to mapping
+			pass
 
 		# Steering jerk (requires prev action), assume steering at index 0 if continuous
 		steer_jerk = 0.0
@@ -256,6 +403,10 @@ class STKRewardShaping(gym.Wrapper):
 			"throttle_align": float(r_throttle_align),
 			"steer_mag": float(r_steer_mag),
 		})
+		# Expose calibration diagnostics periodically
+		if self.auto_calibrate:
+			info.setdefault("obs_index_map", dict(self.obs_index_map) if self.obs_index_map else None)
+			info.setdefault("calibration_done", bool(self._calib_done))
 
 		# Return shaped reward (we replace env reward)
 		return obs, shaped, terminated, truncated, info
