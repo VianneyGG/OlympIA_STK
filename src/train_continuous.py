@@ -196,9 +196,10 @@ def main(args: Optional[list[str]] = None) -> None:
         )
 
     # Match eval env type with training env (VecNormalize) and copy running statistics
-    raw_eval_env = _make_eval_env()
+    # First, vectorize eval env (DummyVecEnv with 1 env)
+    eval_vec = make_vec_env(_make_eval_env, n_envs=1, seed=int(cfg.seed))
     eval_env = VecNormalize(
-        raw_eval_env,
+        eval_vec,
         norm_obs=True,
         norm_reward=False,  # don't normalize rewards for evaluation metrics
         gamma=float(cfg.gamma),
