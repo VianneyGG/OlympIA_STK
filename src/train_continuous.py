@@ -64,7 +64,9 @@ class TrainConfig:
     target_kl: float = 0.02
     use_sde: bool = True
     sde_sample_freq: int = 64
-    total_timesteps: int = int(2e6)
+    total_timesteps: int = int(7e6)
+    # UI
+    progress_bar: bool = True
     # Callbacks
     eval_freq: int = 10_000
     n_eval_episodes: int = 5
@@ -111,6 +113,13 @@ def main(args: Optional[list[str]] = None) -> None:
     parsed = parser.parse_args(args=args)
 
     ensure_windows_dlls()
+    # Prefer plain tqdm over Rich to avoid rare shutdown ImportError from rich progress
+    os.environ.setdefault("TQDM_DISABLE_RICH", "1")
+    # Headless-friendly defaults (Linux CI/servers): no DISPLAY => use SDL dummy drivers
+    if os.name != "nt":
+        if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+            os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+            os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
     cfg = load_config(parsed.config)
     set_global_seeds(int(cfg.seed))
 
@@ -186,9 +195,22 @@ def main(args: Optional[list[str]] = None) -> None:
             wrappers=build_wrappers(cfg),
         )
 
-    eval_env = _make_eval_env()
-    # We'll wrap eval env with VecNormalize using the training stats when available in callback
-    # but to compute mean reward consistently across time, it's acceptable to keep raw eval env as well.
+    # Match eval env type with training env (VecNormalize) and copy running statistics
+    raw_eval_env = _make_eval_env()
+    eval_env = VecNormalize(
+        raw_eval_env,
+        norm_obs=True,
+        norm_reward=False,  # don't normalize rewards for evaluation metrics
+        gamma=float(cfg.gamma),
+        clip_obs=float(cfg.clip_obs),
+    )
+    # Share observation/return RMS from the training VecNormalize wrapper
+    try:
+        eval_env.obs_rms = vec.obs_rms
+        eval_env.ret_rms = vec.ret_rms
+        eval_env.training = False
+    except Exception:
+        pass
 
     # Callbacks
     eval_cb = make_eval_callback(
@@ -211,7 +233,7 @@ def main(args: Optional[list[str]] = None) -> None:
     # Train
     model.learn(
         total_timesteps=int(cfg.total_timesteps),
-        progress_bar=True,
+        progress_bar=bool(cfg.progress_bar),
         callback=cb_list,
         tb_log_name=str(tb_dir.name),
     )
