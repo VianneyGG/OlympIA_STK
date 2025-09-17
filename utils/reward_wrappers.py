@@ -32,6 +32,8 @@ class STKRewardShaping(gym.Wrapper):
 				 p_offtrack: float = 0.2,
 				 p_reverse: float = 0.5,
 				 p_steer_jerk: float = 0.01,
+				 w_throttle_align: float = 0.1,
+				 w_steer_mag: float = 0.01,
 				 bonus_checkpoint: float = 1.0,
 				 bonus_finish: float = 50.0,
 				 use_position_bonus: bool = False,
@@ -52,6 +54,8 @@ class STKRewardShaping(gym.Wrapper):
 		self.p_offtrack = p_offtrack
 		self.p_reverse = p_reverse
 		self.p_steer_jerk = p_steer_jerk
+		self.w_throttle_align = w_throttle_align
+		self.w_steer_mag = w_steer_mag
 		self.bonus_checkpoint = bonus_checkpoint
 		self.bonus_finish = bonus_finish
 		self.use_position_bonus = use_position_bonus
@@ -169,7 +173,8 @@ class STKRewardShaping(gym.Wrapper):
 			reverse = (forward_speed < 0.0)
 
 		# Progress reward: scale a clipped delta to be ~[-1,1]
-		r_progress = float(np.clip(d_prog / max(self.max_progress_step, 1e-6), -1.0, 1.0)) * self.scale_progress
+		dnorm = float(np.clip(d_prog / max(self.max_progress_step, 1e-6), -1.0, 1.0))
+		r_progress = dnorm * self.scale_progress
 
 		# Speed alignment (only forward component rewarded)
 		r_forward = self.w_forward_speed * max(0.0, forward_speed)
@@ -179,6 +184,33 @@ class STKRewardShaping(gym.Wrapper):
 		r_lat = -self.w_lateral * float(lateral_speed)
 		r_rev = -self.p_reverse * (1.0 if reverse else 0.0)
 		r_jerk = -self.p_steer_jerk * float(steer_jerk)
+
+		# Action-aligned shaping (safe without env-specific signals)
+		steer_val = None
+		accel_val = None
+		if isinstance(action, (np.ndarray, list, tuple)) and len(action) >= 1:
+			try:
+				steer_val = float(action[0])
+			except Exception:
+				steer_val = None
+		if isinstance(action, (np.ndarray, list, tuple)) and len(action) >= 2:
+			try:
+				accel_val = float(action[1])
+			except Exception:
+				accel_val = None
+
+		# Encourage throttle only when moving forward (positive progress)
+		r_throttle_align = 0.0
+		if accel_val is not None:
+			# Map accel into [0,1] approximately (works for either [0,1] or [-1,1])
+			a_go = 0.5 * (accel_val + 1.0)
+			a_go = float(np.clip(a_go, 0.0, 1.0))
+			r_throttle_align = self.w_throttle_align * a_go * max(0.0, dnorm)
+
+		# Penalize strong steering when not progressing (discourage spinning)
+		r_steer_mag = 0.0
+		if steer_val is not None:
+			r_steer_mag = -self.w_steer_mag * abs(steer_val) * (1.0 - max(0.0, dnorm))
 
 		# Stuck penalty over a small window of steps
 		stuck = (len(self.progress_hist) == self.progress_hist.maxlen and sum(self.progress_hist) < self.stuck_threshold)
@@ -199,6 +231,7 @@ class STKRewardShaping(gym.Wrapper):
 
 		shaped = (
 			r_progress + r_forward + r_off + r_lat + r_rev + r_jerk + r_stuck + r_pos + r_checkpoint + r_finish
+			+ r_throttle_align + r_steer_mag
 		)
 
 		# Expose components for logging/diagnostics
@@ -220,6 +253,8 @@ class STKRewardShaping(gym.Wrapper):
 			"forward_speed": float(forward_speed),
 			"lateral_speed": float(lateral_speed),
 			"off_track": bool(off_track),
+			"throttle_align": float(r_throttle_align),
+			"steer_mag": float(r_steer_mag),
 		})
 
 		# Return shaped reward (we replace env reward)

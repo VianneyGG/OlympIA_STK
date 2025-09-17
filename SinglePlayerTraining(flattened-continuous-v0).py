@@ -190,7 +190,7 @@ if __name__ == "__main__":
         device="auto",
     )
 
-    model_name = "q-supertuxkart/flattened_continuous-v0-single_track_hacienda-ppos"
+    model_name = "q-supertuxkart/flattened_continuous-v0-single_track_hacienda-ppo"
     eval_env_cb = make_vec_env(_make_monitored_env, n_envs=1)
     eval_env_cb = VecNormalize(eval_env_cb, training=False, norm_obs=True, norm_reward=False, norm_obs_keys=["continuous"])
 

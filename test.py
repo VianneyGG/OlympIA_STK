@@ -32,9 +32,9 @@ if __name__ == '__main__':
     # In both case, this corresponds to a dictionary with two keys:
     # - `continuous` is a vector corresponding to the continuous observations
     # - `discrete` is a vector (of integers) corresponding to discrete observations
-    env = gym.make("supertuxkart/flattened_discrete-v0", render_mode="human", agent=AgentSpec(use_ai=False), track="hacienda")
+    env = gym.make("supertuxkart/flattened_continuous_actions-v0", render_mode="human", agent=AgentSpec(use_ai=False), track="hacienda")
 
-    model = PPO.load("q-supertuxkart/flattened_discrete-v0-single_track_hacienda-ppos", env=env)
+    model = PPO.load("ppo_stk/best_model_continuous/best_model", env=env)
     ix = 0
     done = False
     state, *_ = env.reset()
