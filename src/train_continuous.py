@@ -204,6 +204,7 @@ def main(args: Optional[list[str]] = None) -> None:
         norm_reward=False,  # don't normalize rewards for evaluation metrics
         gamma=float(cfg.gamma),
         clip_obs=float(cfg.clip_obs),
+        norm_obs_keys=(cfg.norm_obs_keys or ["continuous"]),
     )
     # Share observation/return RMS from the training VecNormalize wrapper
     try:
