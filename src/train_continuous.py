@@ -96,7 +96,16 @@ def build_wrappers(cfg: TrainConfig):
         from utils.reward_wrappers import STKRewardShaping
 
         def _shape(env):
-            return STKRewardShaping(env, obs_index_map=cfg.obs_index_map)
+            return STKRewardShaping(
+                env,
+                obs_index_map=cfg.obs_index_map,
+                # Safe defaults; allow override via cfg if present
+                fwd_clip=getattr(cfg, "fwd_clip", 30.0),
+                lat_clip=getattr(cfg, "lat_clip", 10.0),
+                # New center-keeping params
+                w_center=float(getattr(cfg, "w_center", 0.2)),
+                center_clip=float(getattr(cfg, "center_clip", 5.0)),
+            )
 
         wrappers.append(_shape)
 

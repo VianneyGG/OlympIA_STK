@@ -42,8 +42,21 @@ checkpoint_freq: 0
 # Reward shaping
 enable_reward_shaping: true
 
+# Reward shaping normalization clips (to prevent reward explosions)
+# fwd_clip: approximate max forward speed used for normalization
+# lat_clip: approximate max lateral speed used for normalization
+fwd_clip: 30.0
+lat_clip: 10.0
+
+# Center-line keeping (penalize absolute center_path_distance)
+# Increase `w_center` to force the kart to stay closer to the middle of the lane.
+# `center_clip` is the absolute distance (in track units) where the penalty saturates.
+w_center: 0.2
+center_clip: 5.0
+
 # Optional: map indices in obs["continuous"] to semantic signals for shaping (adjust if known)
 # obs_index_map:
 #   forward_speed: 20
 #   lateral_speed: 23
 #   off_track: 91
+#   center_path_distance: 15

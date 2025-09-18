@@ -34,6 +34,14 @@ class STKRewardShaping(gym.Wrapper):
 				 p_steer_jerk: float = 0.01,
 				 w_throttle_align: float = 0.1,
 				 w_steer_mag: float = 0.02,
+				  # Center path distance shaping (penalize being far from center)
+				  w_center: float = 0.2,
+				  center_clip: float = 5.0,
+				  # Positive rewards for recentring
+				  w_center_improve: float = 0.3,
+				  center_snap_threshold: float = 1.0,
+				  bonus_center_snap: float = 1.0,
+				  recover_bonus: float = 2.0,
 				 bonus_checkpoint: float = 1.0,
 				 bonus_finish: float = 50.0,
 				 use_position_bonus: bool = False,
@@ -43,7 +51,9 @@ class STKRewardShaping(gym.Wrapper):
 				  stuck_penalty: float = 0.5,
 				  obs_index_map: Optional[Dict[str, int]] = None,
 				  auto_calibrate: bool = True,
-				  calib_steps: int = 256):
+				  calib_steps: int = 256,
+				  fwd_clip: float = 30.0,
+				  lat_clip: float = 10.0):
 		super().__init__(env)
 		self.prev_progress: Optional[float] = None
 		self.prev_distance: Optional[float] = None
@@ -59,12 +69,22 @@ class STKRewardShaping(gym.Wrapper):
 		self.p_steer_jerk = p_steer_jerk
 		self.w_throttle_align = w_throttle_align
 		self.w_steer_mag = w_steer_mag
+		# Center-keeping shaping
+		self.w_center = float(w_center)
+		self.center_clip = float(max(1e-6, center_clip))
+		self.w_center_improve = float(w_center_improve)
+		self.center_snap_threshold = float(center_snap_threshold)
+		self.bonus_center_snap = float(bonus_center_snap)
+		self.recover_bonus = float(recover_bonus)
 		self.bonus_checkpoint = bonus_checkpoint
 		self.bonus_finish = bonus_finish
 		self.use_position_bonus = use_position_bonus
 		self.max_progress_step = max_progress_step
 		self.stuck_threshold = stuck_threshold
 		self.stuck_penalty = stuck_penalty
+		# Safe normalization clips for speed-derived components
+		self.fwd_clip = float(max(1e-6, fwd_clip))
+		self.lat_clip = float(max(1e-6, lat_clip))
 		# Optional mapping for extracting signals directly from observations
 		# Keys supported: 'forward_speed', 'lateral_speed', 'off_track', 'yaw_sin', 'yaw_cos'
 		self.obs_index_map: Optional[Dict[str, int]] = dict(obs_index_map) if obs_index_map else None
@@ -75,6 +95,44 @@ class STKRewardShaping(gym.Wrapper):
 		self._calib_X: Optional[list] = None
 		self._calib_dprog: Optional[list] = None
 		self._calib_off_info: Optional[list] = None
+		# Internal cache: index of center_path_distance in flattened obs, if available
+		self._center_idx: Optional[int] = None
+		# Track center distance and off-track transitions
+		self._prev_center_abs: Optional[float] = None
+		self._prev_off_track: Optional[bool] = None
+
+	def _seek_flattener(self):
+		"""Return the first underlying wrapper that exposes an observation flattener.
+
+		This lets us map a semantic key like 'center_path_distance' to an index in
+		the flattened `obs["continuous"]` vector provided by the upstream
+		FlattenerWrapper.
+		"""
+		e = getattr(self, "env", None)
+		visited = 0
+		while e is not None and visited < 16:  # avoid infinite loops
+			if hasattr(e, "observation_flattener"):
+				return e
+			e = getattr(e, "env", None)
+			visited += 1
+		return None
+
+	def _ensure_center_index(self) -> None:
+		if self._center_idx is not None:
+			return
+		fl = self._seek_flattener()
+		try:
+			if fl is not None and getattr(fl, "observation_flattener", None) is not None:
+				keys = list(getattr(fl.observation_flattener, "continuous_keys", []))
+				indices = list(getattr(fl.observation_flattener, "indices", []))
+				if keys and indices and "center_path_distance" in keys:
+					k = keys.index("center_path_distance")
+					# Range is [indices[k], indices[k+1])
+					start = int(indices[k])
+					self._center_idx = start  # shape is (1,)
+		except Exception:
+			# Best-effort only
+			self._center_idx = None
 
 	# -------- helpers
 	@staticmethod
@@ -99,9 +157,26 @@ class STKRewardShaping(gym.Wrapper):
 				continue
 		return default
 
-	def _extract_progress(self, info: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+	def _obs_scalar(self, val: Any) -> Optional[float]:
+		"""Extract a single float from common obs value types (array, list, tuple, scalar)."""
+		if val is None:
+			return None
+		try:
+			if isinstance(val, (list, tuple, np.ndarray)):
+				arr = np.asarray(val, dtype=float).reshape(-1)
+				return float(arr[0]) if arr.size > 0 else None
+			return float(val)
+		except Exception:
+			return None
+
+	def _extract_progress(self, info: Dict[str, Any], obs: Any) -> Tuple[Optional[float], Optional[float]]:
 		"""
 		Returns (progress_0_1, distance_raw). One or both may be None.
+
+		Preference order:
+		- info["progress"] if present (0..1)
+		- info["distance"] if present (monotonic cumulative distance)
+		- obs["distance_down_track"] as a raw lap distance (may wrap each lap)
 		"""
 		prog = info.get("progress", None)
 		if prog is not None:
@@ -123,10 +198,16 @@ class STKRewardShaping(gym.Wrapper):
 				return float(lap_prog), None
 			except Exception:
 				pass
+		# last resort: use observation's distance_down_track (per-lap)
+		try:
+			if isinstance(obs, dict) and ("distance_down_track" in obs):
+				return None, float(self._obs_scalar(obs["distance_down_track"]))
+		except Exception:
+			pass
 		return None, None
 
-	def _progress_delta(self, info: Dict[str, Any]) -> float:
-		p, d = self._extract_progress(info)
+	def _progress_delta(self, info: Dict[str, Any], obs: Any) -> float:
+		p, d = self._extract_progress(info, obs)
 		delta = 0.0
 		if p is not None:
 			if self.prev_progress is None:
@@ -138,7 +219,11 @@ class STKRewardShaping(gym.Wrapper):
 			if self.prev_distance is None:
 				delta = 0.0
 			else:
+				# If using per-lap distance (from obs), guard against wrap-around
 				delta = d - self.prev_distance
+				if delta < -self.max_progress_step * 0.5:
+					# Likely lap wrap; ignore negative spike
+					delta = 0.0
 			self.prev_distance = d
 		else:
 			delta = 0.0
@@ -147,18 +232,22 @@ class STKRewardShaping(gym.Wrapper):
 
 	def reset(self, **kwargs):
 		obs, info = self.env.reset(**kwargs)
+		# Try to autodetect center index once the underlying env is built
+		self._ensure_center_index()
 		# initialize trackers
 		self.prev_progress = None
 		self.prev_distance = None
 		self.prev_action = None
 		self.progress_hist.clear()
+		self._prev_center_abs = None
+		self._prev_off_track = None
 		# Reset calibration buffers
 		self._calib_done = (self.obs_index_map is not None) and not self.auto_calibrate
 		self._calib_X = [] if self.auto_calibrate else None
 		self._calib_dprog = [] if self.auto_calibrate else None
 		self._calib_off_info = [] if self.auto_calibrate else None
 		# Prime progress trackers with first info
-		self._progress_delta(info)
+		self._progress_delta(info, obs)
 		return obs, info
 
 	def _finalize_calibration(self):
@@ -249,7 +338,7 @@ class STKRewardShaping(gym.Wrapper):
 		obs, env_reward, terminated, truncated, info = self.env.step(action)
 
 		# Compute deltas & components
-		d_prog = self._progress_delta(info)
+		d_prog = self._progress_delta(info, obs)
 		self.progress_hist.append(max(0.0, d_prog))
 
 		# Accumulate calibration data from raw observations
@@ -264,13 +353,49 @@ class STKRewardShaping(gym.Wrapper):
 			except Exception:
 				pass
 
-		forward_speed = self._get_float(info, 0.0, "forward_speed", "speed")
-		lateral_speed = abs(self._get_float(info, 0.0, "lateral_speed"))
-		off_track = self._get_bool(info, "off_track", "is_off_track")
-		# More robust finished detection
-		finished = self._get_bool(info, "finished", "is_finished")
+		# Derive from observation dict first (kart-local frame)
+		forward_speed = 0.0
+		lateral_speed = 0.0
+		off_track = False
+		center_path_distance = None
+		track_width = None
+		try:
+			if isinstance(obs, dict):
+				# velocity: [x(right), y(up), z(forward)] in kart frame
+				vel = obs.get("velocity", None)
+				if vel is not None:
+					v = np.asarray(vel, dtype=float).reshape(-1)
+					if v.size >= 3:
+						forward_speed = float(v[2])
+						lateral_speed = float(abs(v[0]))
+				# center path distance (signed)
+				cpd = obs.get("center_path_distance", None)
+				center_path_distance = self._obs_scalar(cpd)
+				# first upcoming path width
+				pw = obs.get("paths_width", None)
+				if pw is not None:
+					# pw is a tuple/sequence of arrays with shape (1,)
+					try:
+						if len(pw) > 0:
+							track_width = self._obs_scalar(pw[0])
+					except Exception:
+						track_width = None
+				if (center_path_distance is not None) and (track_width is not None):
+					off_track = abs(center_path_distance) > (float(track_width) * 0.5)
+		except Exception:
+			pass
+
+		# Fallbacks from info (if env supplies them)
+		if abs(forward_speed) < 1e-9:
+			forward_speed = self._get_float(info, 0.0, "forward_speed", "speed")
+		if abs(lateral_speed) < 1e-9:
+			lateral_speed = abs(self._get_float(info, 0.0, "lateral_speed"))
+		if not off_track:
+			off_track = self._get_bool(info, "off_track", "is_off_track")
+		# Finished detection: prefer termination flag from env
+		finished = bool(terminated)
 		if not finished:
-			p, _ = self._extract_progress(info)
+			p, _ = self._extract_progress(info, obs)
 			if p is not None and p >= 0.999:
 				finished = True
 
@@ -323,14 +448,61 @@ class STKRewardShaping(gym.Wrapper):
 		dnorm = float(np.clip(d_prog / max(self.max_progress_step, 1e-6), -1.0, 1.0))
 		r_progress = dnorm * self.scale_progress
 
-		# Speed alignment (only forward component rewarded)
-		r_forward = self.w_forward_speed * max(0.0, forward_speed)
+		# Speed alignment (only forward component rewarded) — normalized & clipped
+		fwd_scaled = max(0.0, float(forward_speed)) / self.fwd_clip
+		fwd_scaled = float(np.clip(fwd_scaled, 0.0, 1.0))
+		r_forward = self.w_forward_speed * fwd_scaled
 
-		# Penalties (stronger off-track, heavier lateral; steer penalty will be squared below)
+		# Penalties (off-track; lateral normalized & clipped to avoid explosion)
 		r_off = -self.p_offtrack * (1.0 if off_track else 0.0)
-		r_lat = -self.w_lateral * float(lateral_speed) ** 2
+		lat_scaled = min(abs(float(lateral_speed)), self.lat_clip) / self.lat_clip
+		r_lat = -self.w_lateral * (lat_scaled ** 2)
 		r_rev = -self.p_reverse * (1.0 if reverse else 0.0)
 		r_jerk = -self.p_steer_jerk * float(steer_jerk)
+
+		# Center distance penalty (prefer center of lane); use obs directly if available
+		r_center = 0.0
+		r_center_improve = 0.0
+		r_center_snap = 0.0
+		r_recover = 0.0
+		try:
+			cval = None
+			if center_path_distance is not None:
+				cval = abs(float(center_path_distance))
+			elif isinstance(obs, dict) and ("center_path_distance" in obs):
+				cval = abs(float(self._obs_scalar(obs["center_path_distance"])))
+			if cval is not None:
+				c_scaled = min(cval, self.center_clip) / self.center_clip
+				r_center = -self.w_center * (c_scaled ** 2)
+				# Reward improvement toward center vs. previous step
+				if self._prev_center_abs is not None:
+					dc = float(self._prev_center_abs - cval)
+					if dc > 0:
+						# Normalize by clip to keep in [-1,1]
+						r_center_improve = self.w_center_improve * (min(dc, self.center_clip) / self.center_clip)
+				# Bonus if we snap back close to center
+				if cval <= self.center_snap_threshold:
+					r_center_snap = self.bonus_center_snap
+			else:
+				# fallback: try flattener if available
+				if isinstance(obs, dict) and "continuous" in obs:
+					self._ensure_center_index()
+					if self._center_idx is not None:
+						vec = np.asarray(obs["continuous"], dtype=float).reshape(-1)
+						cval2 = float(abs(vec[self._center_idx]))
+						c_scaled = min(cval2, self.center_clip) / self.center_clip
+						r_center = -self.w_center * (c_scaled ** 2)
+		except Exception:
+			# Keep training even if something goes wrong
+			r_center = 0.0
+
+		# Recovery bonus: transitioning from off_track->on_track
+		if self._prev_off_track is not None and self._prev_off_track and not off_track:
+			r_recover = self.recover_bonus
+		# Update state trackers
+		self._prev_off_track = bool(off_track)
+		if 'cval' in locals() and cval is not None:
+			self._prev_center_abs = float(cval)
 
 		# Action-aligned shaping (safe without env-specific signals)
 		steer_val = None
@@ -388,7 +560,7 @@ class STKRewardShaping(gym.Wrapper):
 
 		shaped = (
 			r_progress + r_forward + r_off + r_lat + r_rev + r_jerk + r_stuck + r_pos + r_checkpoint + r_finish
-			+ r_throttle_align + r_steer_mag
+			+ r_throttle_align + r_steer_mag + r_center + r_center_improve + r_center_snap + r_recover
 		)
 
 		# Expose components for logging/diagnostics
@@ -399,6 +571,10 @@ class STKRewardShaping(gym.Wrapper):
 			"forward": r_forward,
 			"offtrack": r_off,
 			"lateral": r_lat,
+			"center": r_center,
+			"center_improve": float(r_center_improve),
+			"center_snap": float(r_center_snap),
+			"recover": float(r_recover),
 			"reverse": r_rev,
 			"jerk": r_jerk,
 			"stuck": r_stuck,
