@@ -35,10 +35,10 @@ class STKRewardShaping(gym.Wrapper):
 				 w_throttle_align: float = 0.1,
 				 w_steer_mag: float = 0.02,
 				  # Center path distance shaping (penalize being far from center)
-				  w_center: float = 0.2,
+				  w_center: float = 0.8,
 				  center_clip: float = 5.0,
 				  # Positive rewards for recentring
-				  w_center_improve: float = 0.3,
+				  w_center_improve: float = 0.6,
 				  center_snap_threshold: float = 1.0,
 				  bonus_center_snap: float = 1.0,
 				  recover_bonus: float = 2.0,

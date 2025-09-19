@@ -32,7 +32,7 @@ clip_range_vf: 1.0
 target_kl: 0.02
 use_sde: true
 sde_sample_freq: 64
-total_timesteps: 7000000
+total_timesteps: 2000000
 
 # Callbacks
 eval_freq: 10000
